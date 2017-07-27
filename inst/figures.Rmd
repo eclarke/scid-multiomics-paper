@@ -5,4 +5,69 @@ date: "7/27/2017"
 output: html_document
 params:
   root_fp: "/home/ecl/data/100_SCID/scidpaper"
+  devmode: TRUE
+  parallel: TRUE
 ---
+
+```{r prelude, echo=params$devmode, message=params$devmode, warning=params$devmode}
+
+suppressPackageStartupMessages({
+  library(plyr)
+  library(dplyr)
+  library(ggplot2)
+  library(tidyr)
+  library(viridis)
+  library(lubridate)
+  library(Matrix)
+  library(lymphclon)
+  library(doMC)
+  library(gridExtra)
+  library(ape)
+  library(grid)
+  library(ggthemes)
+  library(reshape2)
+  library(readxl)
+  library(extrafont)
+  library(stringr)
+})
+
+if (params$parallel) {
+  doMC::registerDoMC(cores=parallel::detectCores())
+}
+
+knitr::opts_chunk$set(
+  echo = params$devmode,
+  message = params$devmode,
+  warning = params$devmode
+)
+
+.root_fp <- "~/data/100_SCID"
+.this.fp <- file.path(.root_fp, "103_CombinedAnalysis")
+.ir.fp <- file.path(.root_fp, "101_ImmuneRepertoire")
+.mb.fp <- file.path(.root_fp, "102_Microbiome")
+
+subjects <- c(
+  "SCID00001",
+  "SCID00003",
+  "SCID00004",
+  "SCID00005",
+  "SCID00007"
+)
+
+source(file.path(.this.fp, "lib/load_data.R"))
+
+.combined_data_fp <- file.path(.this.fp, "data/combined_data.RData")
+.subject_data_fp <- sapply(subjects, function(sub) file.path(.this.fp, "data"))
+.patient_data_fp <- file.path(.this.fp, "data", paste0(params$subject, ".RData"))
+
+default_family <- "sans"
+default_size <- 14
+
+theme_set(theme_classic(base_size=default_size, base_family=default_family) +
+    theme(plot.title = element_text(hjust=0),
+          axis.ticks = element_line(size=0.75), 
+          axis.line.x = element_line(colour = 'black', size=0.6, linetype='solid'),
+          axis.line.y = element_line(colour = 'black', size=0.6, linetype='solid')))
+
+```
+

@@ -9,3 +9,8 @@ Encoding: UTF-8
 LazyData: true
 URL: https://github.com/eclarke/scid-multiomics-paper
 BugReports: https://github.com/eclarke/scid-multiomics-paper/issues
+Imports: dplyr,
+    dtplyr,
+    data.table,
+    readxl,
+    stringr

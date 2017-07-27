@@ -1,3 +1,6 @@
 [submodule "data-raw/mb"]
 	path = data-raw/mb
 	url = https://microb98.med.upenn.edu/bitbucket/scm/scid/microbiome-data.git
+[submodule "data-raw/tcr"]
+	path = data-raw/tcr
+	url = https://microb98.med.upenn.edu/bitbucket/scm/scid/tcr-data.git
