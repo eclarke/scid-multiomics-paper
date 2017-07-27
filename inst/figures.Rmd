@@ -12,7 +12,6 @@ params:
 ```{r prelude, echo=params$devmode, message=params$devmode, warning=params$devmode}
 
 suppressPackageStartupMessages({
-  library(plyr)
   library(dplyr)
   library(ggplot2)
   library(tidyr)
@@ -41,12 +40,7 @@ knitr::opts_chunk$set(
   warning = params$devmode
 )
 
-.root_fp <- "~/data/100_SCID"
-.this.fp <- file.path(.root_fp, "103_CombinedAnalysis")
-.ir.fp <- file.path(.root_fp, "101_ImmuneRepertoire")
-.mb.fp <- file.path(.root_fp, "102_Microbiome")
-
-subjects <- c(
+patients <- c(
   "SCID00001",
   "SCID00003",
   "SCID00004",
@@ -54,20 +48,59 @@ subjects <- c(
   "SCID00007"
 )
 
-source(file.path(.this.fp, "lib/load_data.R"))
-
-.combined_data_fp <- file.path(.this.fp, "data/combined_data.RData")
-.subject_data_fp <- sapply(subjects, function(sub) file.path(.this.fp, "data"))
-.patient_data_fp <- file.path(.this.fp, "data", paste0(params$subject, ".RData"))
-
 default_family <- "sans"
 default_size <- 14
 
 theme_set(theme_classic(base_size=default_size, base_family=default_family) +
-    theme(plot.title = element_text(hjust=0),
-          axis.ticks = element_line(size=0.75), 
-          axis.line.x = element_line(colour = 'black', size=0.6, linetype='solid'),
-          axis.line.y = element_line(colour = 'black', size=0.6, linetype='solid')))
+    theme(
+      plot.title = element_text(hjust=0),
+      axis.ticks = element_line(size=0.75), 
+      axis.line.x = element_line(colour = 'black', size=0.6, linetype='solid'),
+      axis.line.y = element_line(colour = 'black', size=0.6, linetype='solid')))
 
+data(tcr)
+data(mb)
+
+# Filter TCR data to just these subjects and healthy controls, and just T cells
+tcr$mdata <- tcr$mdata %>% 
+  filter(patient %in% c(patients, as.character(tcr$controls))) %>% 
+  filter(cell.type == "Tcells") %>%
+  droplevels()
+tcr$seqs <- tcr$seqs %>% filter(accn %in% mdata$accn)
+```
+
+
+```{r}
+invisible(with(data.frame(), {
+  mb.timepoints <- mb$timepoints %>% 
+    filter(SubjectID %in% patients) %>%
+    select(SubjectID, TimeSinceTransplant) %>%
+    mutate(mb = round(TimeSinceTransplant / 30)) %>%
+    select(SubjectID, mb)
+  tcr.timepoints <- tcr$mdata %>% 
+    filter(patient %in% patients) %>%
+    select(SubjectID=patient, tcr=nmonths)
+  timepoints <- left_join(mb.timepoints, tcr.timepoints) %>%
+    tidyr::gather(key="type", value="months", mb, tcr) %>%
+    distinct(SubjectID, type, months) %>%
+    mutate(type = forcats::fct_recode(
+      type, "Microbiome"="mb", "T cell sequencing"="tcr"))
+  # Virome sampling goes here
+
+  p <- ggplot(timepoints, aes(x=months, y=type, color=type, fill=type)) +
+    geom_vline(xintercept=0, linetype=2, color="grey50") +
+    geom_line(size=1) +
+    geom_point(shape=21, size=3, color="black") +
+    scale_x_continuous(breaks=c(0, 12, 24, 36)) +
+    facet_wrap(~ SubjectID, ncol=1) + 
+    theme_light(base_size = 14) +
+    theme(
+      axis.text.y = element_blank(), 
+      axis.title.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      legend.title= element_blank()
+    )
+  plot(p)
+}))
 ```
 
