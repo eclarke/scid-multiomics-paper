@@ -1,0 +1,8 @@
+---
+title: "SCID Multiomics Figures"
+author: "Erik Clarke"
+date: "7/27/2017"
+output: html_document
+params:
+  root_fp: "/home/ecl/data/100_SCID/scidpaper"
+---
