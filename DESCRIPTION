@@ -1,0 +1,11 @@
+Package: scidpaper
+Title: Microbiome and immune function after SCID-X1 gene therapy
+Version: 0.0.0.9000
+Authors@R: person("Erik", "Clarke", email = "firstlast@gmail.com", role = c("aut", "cre"))
+Description: Generates figures and tables for the SCID-X1 multiomics paper
+Depends: R (>= 3.2.3)
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+URL: https://github.com/eclarke/scid-multiomics-paper
+BugReports: https://github.com/eclarke/scid-multiomics-paper/issues
