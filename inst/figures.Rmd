@@ -50,6 +50,7 @@ patients <- c(
 
 default_family <- "sans"
 default_size <- 14
+fig.path <- function(name) {file.path(params$root_fp, "figures", name)}
 
 theme_set(theme_classic(base_size=default_size, base_family=default_family) +
     theme(
@@ -70,7 +71,7 @@ tcr$seqs <- tcr$seqs %>% filter(accn %in% mdata$accn)
 ```
 
 
-```{r}
+```{r fig-timeline}
 invisible(with(data.frame(), {
   mb.timepoints <- mb$timepoints %>% 
     filter(SubjectID %in% patients) %>%
@@ -87,20 +88,27 @@ invisible(with(data.frame(), {
       type, "Microbiome"="mb", "T cell sequencing"="tcr"))
   # Virome sampling goes here
 
-  p <- ggplot(timepoints, aes(x=months, y=type, color=type, fill=type)) +
-    geom_vline(xintercept=0, linetype=2, color="grey50") +
-    geom_line(size=1) +
-    geom_point(shape=21, size=3, color="black") +
-    scale_x_continuous(breaks=c(0, 12, 24, 36)) +
-    facet_wrap(~ SubjectID, ncol=1) + 
-    theme_light(base_size = 14) +
+  p <- ggplot(timepoints, aes(x=SubjectID, y=months, color=type, group=type)) +
+    geom_hline(yintercept=0, color="grey20") +
+    geom_line(aes(group=SubjectID), position=position_dodge(0.2)) +
+    geom_point(size=2, position=position_dodge(0.2)) +
+    scale_y_continuous(breaks=c(0, 12, 24, 36)) +
+    coord_flip() +
+    ggthemes::scale_color_fivethirtyeight() +
+    ggthemes::theme_tufte(base_family = "sans") +
     theme(
+      # panel.grid = element_line(color="white", size=0),
+      # panel.grid.major.y = element_line(color="grey50", size=0.5, linetype = 3),
       axis.text.y = element_blank(), 
       axis.title.y = element_blank(),
       axis.ticks.y = element_blank(),
-      legend.title= element_blank()
+      legend.title= element_blank(),
+      strip.text.y = element_text(angle=180)
     )
+  
   plot(p)
+  ggsave(fig.path("Timeline.pdf"), width=6, height=5)
+
 }))
 ```
 
