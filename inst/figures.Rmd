@@ -62,43 +62,93 @@ theme_set(theme_classic(base_size=default_size, base_family=default_family) +
 data(tcr)
 data(mb)
 
+# Temporary virome data
+vir.samples <- stringr::str_replace(c(
+  "SCID00005.ST.7.4",
+  "SCID00005.ST.6.5",
+  "SCID00005.ST.6.4",
+  "SCID00005.ST.1.4",  
+  "SCID00004.ST.5.2",
+  "SCID00004.ST.2.3",  
+  "SCID00004.ST.1.4",    
+  "SCID00003.ST.3.2",
+  "SCID00003.ST.2.3",
+  "SCID00003.ST.1.3",  
+  "SCID00001.ST.8.2",    
+  "SCID00001.ST.7.6",    
+  "SCID00001.ST.4.6"     
+), "\\.[0-9]$", "")
+  
+
+vir <- mb$mdata %>% 
+  mutate(SourceID = stringr::str_replace(SampleID, "\\.[0-9]$", "")) %>%
+  select(-c(SampleID, ExtrNo, VialNo, ExtrTechnician, ExtrPlate, ExtrPlateWell, ExtrDate, Reads)) %>%
+  distinct() %>%
+  filter(SourceID %in% vir.samples)
+
 # Filter TCR data to just these subjects and healthy controls, and just T cells
 tcr$mdata <- tcr$mdata %>% 
   filter(patient %in% c(patients, as.character(tcr$controls))) %>% 
   filter(cell.type == "Tcells") %>%
   droplevels()
-tcr$seqs <- tcr$seqs %>% filter(accn %in% mdata$accn)
+tcr$seqs <- tcr$seqs %>% filter(accn %in% tcr$mdata$accn)
 ```
 
 
 ```{r fig-timeline}
 invisible(with(data.frame(), {
+
+  # browser() 
+  
   mb.timepoints <- mb$timepoints %>% 
     filter(SubjectID %in% patients) %>%
-    select(SubjectID, TimeSinceTransplant) %>%
+    mutate(TimepointID = paste(SubjectID, Num, sep=".")) %>%
+    select(SubjectID, TimepointID, TimeSinceTransplant) %>%
     mutate(mb = round(TimeSinceTransplant / 30)) %>%
-    select(SubjectID, mb)
+    select(SubjectID, TimepointID, mb)
+  
+  vir <- vir %>%
+    mutate(TimepointID = paste(Subject, SampleNo, sep="."))
+  vir.timepoints <- mb.timepoints %>%
+    filter(TimepointID %in% vir$TimepointID) %>%
+    rename(vr=mb)
+
   tcr.timepoints <- tcr$mdata %>% 
     filter(patient %in% patients) %>%
     select(SubjectID=patient, tcr=nmonths)
+  
   timepoints <- left_join(mb.timepoints, tcr.timepoints) %>%
-    tidyr::gather(key="type", value="months", mb, tcr) %>%
+    left_join(vir.timepoints) %>%
+    tidyr::gather(key="type", value="months", mb, tcr, vr) %>%
     distinct(SubjectID, type, months) %>%
+    mutate(type = forcats::fct_relevel(type, "vr", "mb", "tcr"))# %>%
     mutate(type = forcats::fct_recode(
-      type, "Microbiome"="mb", "T cell sequencing"="tcr"))
-  # Virome sampling goes here
+      type,
+      "Microbiome"="mb",
+      "T cell sequencing"="tcr",
+      "Virome"="vr"))
 
-  p <- ggplot(timepoints, aes(x=SubjectID, y=months, color=type, group=type)) +
-    geom_hline(yintercept=0, color="grey20") +
-    geom_line(aes(group=SubjectID), position=position_dodge(0.2)) +
-    geom_point(size=2, position=position_dodge(0.2)) +
-    scale_y_continuous(breaks=c(0, 12, 24, 36)) +
-    coord_flip() +
-    ggthemes::scale_color_fivethirtyeight() +
-    ggthemes::theme_tufte(base_family = "sans") +
+  p <- ggplot(timepoints, aes(x=months, y=type, color=type)) +
+    # geom_hline(yintercept=0, color="grey20") +
+    geom_point(size=2, aes(shape=months>0), fill="white") +
+    scale_shape_manual(values=c("TRUE"=19, "FALSE"=21), labels=c("TRUE"="After therapy", "FALSE"="Before therapy")) +
+    scale_x_continuous(breaks=c(0, 6, 12, 18, 24)) +
+    scale_y_discrete(expand = c(0, 1.5)) +
+    ggsci::scale_color_lancet(
+      breaks=c("tcr", "mb", "vr"),
+      labels=c(
+        "Microbiome"="mb",
+        "T cell sequencing"="tcr",
+        "Virome"="vr")) +
+    # ggthemes::scale_color_fivethirtyeight() +
+    theme_minimal() +
+    # ggthemes::theme_tufte(base_family = "sans") +
+    facet_grid(SubjectID ~ ., switch="y") +
     theme(
-      # panel.grid = element_line(color="white", size=0),
-      # panel.grid.major.y = element_line(color="grey50", size=0.5, linetype = 3),
+      panel.grid = element_line(color="white", size=0),
+      panel.grid.major.x = element_line(color="grey50", linetype=3, size=0.4),
+      panel.grid.major.y = element_line(color="grey50", linetype=3, size=0.4),
+      panel.margin.y=unit(0, "lines"),
       axis.text.y = element_blank(), 
       axis.title.y = element_blank(),
       axis.ticks.y = element_blank(),
