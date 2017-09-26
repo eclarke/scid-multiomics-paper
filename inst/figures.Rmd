@@ -26,8 +26,8 @@ suppressPackageStartupMessages({
   library(ggthemes)
   library(reshape2)
   library(readxl)
-  library(extrafont)
   library(stringr)
+  library(tsne)
 })
 
 if (params$parallel) {
@@ -55,7 +55,7 @@ fig.path <- function(name) {file.path(params$root_fp, "figures", name)}
 theme_set(theme_classic(base_size=default_size, base_family=default_family) +
     theme(
       plot.title = element_text(hjust=0),
-      axis.ticks = element_line(size=0.75), 
+      axis.ticks = element_line(size=0.75),
       axis.line.x = element_line(colour = 'black', size=0.6, linetype='solid'),
       axis.line.y = element_line(colour = 'black', size=0.6, linetype='solid'),
       strip.background = element_blank()
@@ -63,6 +63,15 @@ theme_set(theme_classic(base_size=default_size, base_family=default_family) +
 
 data(tcr)
 data(mb)
+data(intsites)
+
+int <- plyr::ldply(intsites, function(is) {
+  is$popsize %>% filter(celltype %in% c("Tcells", "PBMC")) %>%
+    select(patient, "nmonths"=timepoint_m, "chao1"=S.chao1, Gini) %>%
+    mutate(chao1=as.numeric(str_trim(chao1))) %>%
+    mutate(Gini=as.numeric(str_trim(Gini))) %>%
+    as.data.frame()
+})
 
 # Temporary virome data
 vir.samples <- stringr::str_replace(c(
@@ -90,8 +99,8 @@ vir <- mb$mdata %>%
 
 # Filter TCR data to just these subjects and healthy controls, and just T cells
 tcr$mdata <- tcr$mdata %>% 
-  filter(patient %in% c(patients, as.character(tcr$controls))) %>% 
-  filter(cell.type == "Tcells") %>%
+  # filter(patient %in% c(patients, as.character(tcr$controls))) %>% 
+  filter(cell.type %in% c("Tcells", "PBMC")) %>%
   droplevels()
 tcr$seqs <- tcr$seqs[tcr$seqs$accn %in% tcr$mdata$accn, ]
 
@@ -118,10 +127,10 @@ tcr$countmat <- make_sparsemat(tcr$seqs, "aminoAcid", "accnRep", "count")
 ```{r fig-timeline}
 invisible(with(data.frame(), {
 
-  # browser() 
+  # browser()
   
   mb.timepoints <- mb$timepoints %>% 
-    filter(SubjectID %in% patients) %>%
+    # filter(SubjectID %in% patients) %>%
     mutate(TimepointID = paste(SubjectID, Num, sep=".")) %>%
     select(SubjectID, TimepointID, TimeSinceTransplant) %>%
     mutate(mb = round(TimeSinceTransplant / 30)) %>%
@@ -134,12 +143,16 @@ invisible(with(data.frame(), {
     rename(vr=mb)
 
   tcr.timepoints <- tcr$mdata %>% 
-    filter(patient %in% patients) %>%
+    # filter(patient %in% patients) %>%
     select(SubjectID=patient, tcr=nmonths)
+  
+  int.timepoints <- tcr.timepoints %>%
+    select("int"=tcr, SubjectID)
   
   timepoints <- left_join(mb.timepoints, tcr.timepoints) %>%
     left_join(vir.timepoints) %>%
-    tidyr::gather(key="type", value="months", mb, tcr, vr) %>%
+    left_join(int.timepoints) %>%
+    tidyr::gather(key="type", value="months", mb, tcr, vr, int) %>%
     distinct(SubjectID, type, months) %>%
     mutate(type = forcats::fct_relevel(type, "vr", "mb", "tcr"))# %>%
 
@@ -150,11 +163,12 @@ invisible(with(data.frame(), {
     geom_point(size=2, aes(shape=months>0), fill="white") +
 
     scale_shape_manual(values=c("TRUE"=19, "FALSE"=21), labels=c("TRUE"="After therapy", "FALSE"="Before therapy")) +
-    scale_x_continuous(breaks=c(0, 6, 12, 18, 24)) +
+    # scale_x_continuous(breaks=c(0, 6, 12, 18, 24)) +
     scale_y_discrete(expand = c(0, 1.5)) +
     ggsci::scale_color_nejm(
-      breaks=c("tcr", "mb", "vr"),
+      breaks=c("int","tcr", "mb", "vr"),
       labels=c(
+        int="Integration sites",
         mb="Microbiome",
         tcr="T cell sequencing",
         vr="Virome")) +
@@ -180,11 +194,49 @@ invisible(with(data.frame(), {
 }))
 ```
 
+```{r fig-intsite-longitudinal}
+invisible(with(data.frame(), {
+  dat <- plyr::ldply(intsites, function(is) {
+    is$popsize %>% filter(celltype == "Tcells") %>%
+      select(patient, "nmonths"=timepoint_m, "chao1"=S.chao1, Gini) %>%
+      mutate(chao1=as.numeric(str_trim(chao1))) %>%
+      mutate(Gini=as.numeric(str_trim(Gini))) %>%
+      as.data.frame()
+  })
+
+  dat <- dat %>% gather(metric, value, chao1, Gini) %>%
+    mutate(metric = forcats::fct_recode(
+      metric,
+      "Est. int. sites"="chao1",
+      "Gini index"="Gini"
+    ))
+  p <- ggplot(dat, aes(nmonths, value, color=patient)) +
+    geom_line() +
+    geom_point() +
+    facet_wrap(~ metric, scales="free", ncol=1, switch="y") +
+    ggsci::scale_color_aaas(name="Subject") +
+    scale_x_continuous(
+      "Months since therapy",
+      limits=c(0, 37), breaks=c(0,6,12,18,24, 30, 36), expand=c(0,0)) +
+    theme(
+      axis.title.y=element_blank(),
+      panel.margin.y=unit(1.5,"lines"),
+      strip.background=element_blank(),
+      strip.text=element_text(size=12)
+    )
+  plot(p)
+  ggsave(fig.path("Fig2-IntSiteStats.pdf"), width=6, height=4)
+}))
+
+```
+
+
 ```{r setup-tcr-stats}
 tcr$alphadiv <- with(tcr, {
   plyr::ddply(mdata, plyr::.(accn), function(accn_df) {
     print(unique(accn_df$accn))
 
+    browser()
     sub.mat <- countmat[, as.character(accn_df$accnRep), drop=FALSE]
     sub.mat <- as.matrix(sub.mat[rowSums(sub.mat) > 0, , drop=FALSE])
     
@@ -201,6 +253,7 @@ tcr$alphadiv <- with(tcr, {
       x$clonality <- NA
     }
     print(x$clonality)
+    x$evenness <- mean(vegan::diversity(t(sub.mat))/log(vegan::specnumber(t(sub.mat))))
     x
   },
   .parallel=params$parallel,
@@ -225,7 +278,9 @@ invisible(with(tcr, {
 ```{r fig-tcr-stats}
 invisible(with(tcr, {
   # browser()
-  dat <- mdata %>% select(accn, nmonths, patient, Productive.Uniques, Out.of.Frame.Uniques, Has.Stop.Uniques) %>%
+  dat <- mdata %>% 
+    # filter(cell.type == "Tcells") %>%
+    select(accn, nmonths, patient, trial, cell.type, Productive.Uniques, Out.of.Frame.Uniques, Has.Stop.Uniques) %>%
     tidyr::gather(metric, value, Productive.Uniques:Has.Stop.Uniques) %>%
     mutate(metric = forcats::fct_recode(
       metric,
@@ -243,7 +298,7 @@ invisible(with(tcr, {
     geom_point(shape=16, color="white", size=2) +
     geom_point(shape=1, size=2) +
     geom_point(shape=21, color=NA, alpha=0.7, size=2) +
-    facet_grid(patient ~ ., scales="free_y", switch="y") +
+    facet_grid(trial+patient+cell.type ~ ., scales="free_y", switch="y", space="free") +
     scale_x_continuous("Unique TCRs") +
     scale_color_manual(labels=metric.labels, values=metric.colors) +
     scale_fill_manual(labels=metric.labels, values=metric.colors) +
@@ -251,77 +306,14 @@ invisible(with(tcr, {
       axis.title.y = element_blank(),
       axis.text.y = element_blank(),
       axis.ticks.y = element_blank(),
-      strip.text.y = element_text(angle=180, hjust=1),
+      strip.text.y = element_text(angle=180, hjust=0),
       axis.title.x = element_text(margin=margin(t=10)),
       panel.grid.major.y = element_line(linetype=3, color="grey30", size=0.5),
       legend.title=element_blank()
     )
   plot(p)
-  ggsave(fig.path("Fig3A-TCRStats.pdf"), width=6, height=4)
-}))
-```
-
-```{r setup-tcr-gene-usage}
-tcr$vj <- with(tcr, {
-  scid.accns <- unique((mdata %>% filter(grepl("SCID", patient), nmonths>4))$accn)
-  vj.clones <- seqs %>%
-    filter(sequenceStatus == "In", accn %in% scid.accns) %>%
-    group_by(accn, aminoAcid) %>%
-    summarize(count=sum(count)) %>%
-    mutate(frequency = count/sum(count)) %>%
-    left_join(
-      distinct(
-        subset(seqs, select=-c(nucleotide, count, frequency, cdr3Length)), 
-        accn, aminoAcid, .keep_all=TRUE)) %>%
-    filter(vGeneName != "unresolved", jGeneName != "unresolved") %>%
-    merge(mdata, by='accnRep') %>%
-    as.data.frame() %>%
-    group_by(vGeneName, jGeneName, patient, nmonths) %>%
-    summarize(sumFreq = sum(frequency)) %>%
-    group_by(patient, nmonths) %>%
-    mutate(sumFreq = sumFreq/sum(sumFreq)) %>%
-    mutate(comboRank = percent_rank(sumFreq))
-  
-  vj.clones %>%
-    group_by(patient, vGeneName) %>% 
-    mutate(vFreq = sum(sumFreq)) %>%
-    group_by(patient) %>%
-    mutate(vRank = percent_rank(vFreq)) %>%
-    filter(vRank > 0.65) %>%
-    complete(nmonths, nesting(vGeneName, jGeneName), fill=list(sumFreq=0, comboRank=0)) %>%
-    mutate(Months = sprintf("%dm", nmonths)) %>%
-    mutate(Months = reorder(Months, nmonths)) %>%
-    mutate_each(funs(sub("TCRB", "", .)), vGeneName, jGeneName)
-  
-})
-```
-
-```{r fig-tcr-gene-usage}
-invisible(with(tcr, {
-  p <- ggplot(vj, aes(vGeneName, jGeneName, fill=sumFreq)) +
-    geom_tile(color="black", size=0.3) +
-    # scale_fill_gradientn(colors=c("#2c7bb6","#ffffbf","#d7191c"), labels=scales::percent) +
-    scale_fill_viridis("Frequency", option="C", labels=scales::percent) +
-    coord_equal() +
-    facet_grid(Months~patient, scales="free", space="free") +
-    guides(fill=guide_colorbar(title.position = "top", direction = "horizontal", title.hjust = 0.5)) +
-    theme_classic(base_size=14, base_family=default_family) +
-    theme(
-      axis.text = element_blank(),
-      # axis.text.x = element_text(angle=-45, vjust=1, hjust=0),
-      strip.text = element_text(size=14, hjust=0.5),
-      strip.background=element_blank(),
-      axis.ticks=element_blank(),
-      panel.margin=unit(0.1, "line"),
-      panel.margin.x = unit(1, "line"),
-      plot.title=element_text(hjust=0, face="bold"),
-      legend.position=c(0.29,0.3),
-      legend.justification=c(0,0)
-      # axis.title=element_blank()
-    ) +
-    labs(x="V Genes", y="J Genes")
-  plot(eclectic::make_square(p))
-  ggsave(fig.path("Fig3C-TCRVJUsage.pdf"), width=9, height=7)
+  # browser()
+  ggsave(fig.path("Fig3A-TCRStats.pdf"), width=6.5, height=8)
 }))
 ```
 
@@ -331,15 +323,16 @@ invisible(with(tcr, {
   # browser()
   mdata <- left_join(mdata, alphadiv)
   metrics <- mdata %>% 
-    filter(n.samples >= 2) %>%
-    select(accn, patient, nmonths, chao2, clonality) %>%
+    filter(n.samples >= 2, cell.type=="Tcells") %>%
+    select(accn, patient, nmonths, chao2, clonality, evenness) %>%
     distinct() %>%
-    tidyr::gather(metric, value, chao2, clonality) %>%
-    mutate(metric = forcats::fct_relevel(metric, "chao2", "clonality")) %>%
+    tidyr::gather(metric, value, chao2, clonality, evenness) %>%
+    mutate(metric = forcats::fct_relevel(metric, "chao2", "clonality" ,"evenness")) %>%
     mutate(metric = forcats::fct_recode(
       metric,
       "Clonality"="clonality",
-      "Est. unique T cells"="chao2"
+      "Est. unique T cells"="chao2",
+      "Species evenness"="evenness"
     )) %>%
     filter(!is.na(value))
   healthy.adults <- metrics %>% filter(grepl("ND", patient)) %>%
@@ -387,7 +380,379 @@ invisible(with(tcr, {
       strip.text=element_text(size=12)
     )
   plot(p)
-  ggsave(fig.path("Fig3B-TCRLongitudinal.pdf"), width=6, height=4)
+  # browser()
+  ggsave(fig.path("Fig3B-TCRLongitudinal.pdf"), width=6, height=6)
 }))
 ```
+
+
+```{r setup-tcr-gene-usage}
+tcr$vj <- with(tcr, {
+  scid.accns <- unique((mdata %>% filter(grepl("SCID", patient), nmonths>4))$accn)
+  # scid.accns <- unique((mdata %>% filter(group == "patient", nmonths>4))$accn)
+  vj.clones <- seqs %>%
+    filter(sequenceStatus == "In", accn %in% scid.accns) %>%
+    group_by(accn, aminoAcid) %>%
+    summarize(count=sum(count)) %>%
+    mutate(frequency = count/sum(count)) %>%
+    left_join(
+      distinct(
+        subset(seqs, select=-c(nucleotide, count, frequency, cdr3Length)), 
+        accn, aminoAcid, .keep_all=TRUE)) %>%
+    filter(vGeneName != "unresolved", jGeneName != "unresolved") %>%
+    merge(mdata, by='accnRep') %>%
+    as.data.frame() %>%
+    group_by(vGeneName, jGeneName, patient, nmonths) %>%
+    summarize(sumFreq = sum(frequency)) %>%
+    group_by(patient, nmonths) %>%
+    mutate(sumFreq = sumFreq/sum(sumFreq)) %>%
+    mutate(comboRank = percent_rank(sumFreq))
+  
+  vj.clones %>%
+    group_by(patient, vGeneName) %>% 
+    mutate(vFreq = sum(sumFreq)) %>%
+    group_by(patient) %>%
+    mutate(vRank = percent_rank(vFreq)) %>%
+    filter(vRank > 0.65) %>%
+    complete(nmonths, nesting(vGeneName, jGeneName), fill=list(sumFreq=0, comboRank=0)) %>%
+    mutate(Months = sprintf("%dm", as.integer(nmonths))) %>%
+    mutate(Months = reorder(Months, nmonths)) %>%
+    mutate_each(funs(sub("TCRB", "", .)), vGeneName, jGeneName)
+  
+})
+```
+
+```{r fig-tcr-gene-usage}
+invisible(with(tcr, {
+  p <- ggplot(vj, aes(vGeneName, jGeneName, fill=sumFreq)) +
+    geom_tile(color="black", size=0.3) +
+    # scale_fill_gradientn(colors=c("#2c7bb6","#ffffbf","#d7191c"), labels=scales::percent) +
+    scale_fill_viridis("Frequency", option="C", labels=scales::percent) +
+    coord_equal() +
+    facet_grid(Months~patient, scales="free", space="free") +
+    guides(fill=guide_colorbar(title.position = "top", direction = "horizontal", title.hjust = 0.5)) +
+    theme_classic(base_size=14, base_family=default_family) +
+    theme(
+      axis.text = element_blank(),
+      # axis.text.x = element_text(angle=-45, vjust=1, hjust=0),
+      strip.text = element_text(size=14, hjust=0.5),
+      strip.background=element_blank(),
+      axis.ticks=element_blank(),
+      panel.margin=unit(0.1, "line"),
+      panel.margin.x = unit(1, "line"),
+      plot.title=element_text(hjust=0, face="bold"),
+      # legend.position=c(0.29,0.3),
+      legend.justification=c(0,0)
+      # axis.title=element_blank()
+    ) +
+    labs(x="V Genes", y="J Genes")
+  plot(eclectic::make_square(p))
+  browser()
+  ggsave(fig.path("Fig3C-TCRVJUsage.pdf"), width=9, height=7)
+}))
+```
+
+```{r setup-tcr-rep-similarity}
+tcr$dists <- with(tcr, {
+  # browser()
+  dists <- plyr::adply(combn(mdata$accnRep, 2), 2, function(pair) {
+    x <- countmat[, pair[1]]
+    y <- countmat[, pair[2]]
+    # print(pair)
+    # print(dim(x))
+    # print(dim(y))
+    data.frame(x=pair[1], y=pair[2], cj=fossil::jaccard(x, y))
+  }, .parallel=params$parallel, .paropts=list(.packages='fossil', .export=c("countmat", "mdata")), .id=NULL)
+  
+  # dists <- dists %>% select(-X1)
+  .tmp1 <- dists[!is.na(dists$cj), ]
+  .tmp2 <- data.frame(x=.tmp1$y, y=.tmp1$x, cj=.tmp1$cj)
+  rbind(.tmp1, .tmp2) %>% distinct(x, y, .keep_all=TRUE)
+})
+```
+
+```{r fig-tcr-rep-similarity}
+invisible(with(tcr, {
+
+  
+  .dists <- dists %>%
+    complete(x, nesting(y)) %>%
+    merge(tcr$mdata, by.x="x", by.y="accnRep") %>%
+    # filter(patient == params$subject, cell.type=="Tcells") %>%
+    filter(y %in% x) %>%
+    droplevels()
+  
+  # Order factors based on timepoint
+  .dists$x <- with(.dists, reorder(x, nmonths, ordered=TRUE))
+  .dists$y <- factor(.dists$y, levels(.dists$x))
+  
+  .dists <- .dists %>% group_by(patient) %>%
+    filter(y %in% x)
+  
+  p <- .dists %>% filter(group=="patient") %>% #filter(grepl("SCID", patient)) %>% 
+    ggplot(aes(y, x, fill=cj)) +
+    geom_tile(color="black", size=0.3) +
+    scale_x_discrete(labels=eclectic::named_vector(.dists, "x", "timepoint")) +
+    scale_y_discrete(labels=eclectic::named_vector(.dists, "x", "timepoint")) +
+    coord_fixed() +
+    facet_wrap(~ patient, scales = "free") +
+    scale_fill_viridis("Jaccard similarity", option="D", breaks=scales::extended_breaks(n=5)) +
+    # theme_minimal(base_size = 16) +
+    guides(fill=guide_colorbar(title.position="top", title.hjust=0.5, barwidth = 15, barheight=0.8)) +
+    theme(
+      axis.line = element_blank(),
+      plot.title=element_text(hjust=0),
+      legend.direction="horizontal",
+      legend.position="bottom",
+      axis.title=element_blank(),
+      axis.text.x=element_text(angle=90, hjust=1, vjust=0.5))
+  plot(eclectic::make_square(p))
+  browser()
+  ggsave(fig.path("Fig3D-TCRRepSimilarity.pdf"), width=6, height=7)
+}))
+```
+
+```{r fig-tcr-pcoa}
+invisible(with(tcr, {
+  browser()
+  # to_omit <- (mdata %>% filter(patient %in% c("P7/FM", "DT001", "P6/BA")))$accnRep
+  to_omit <- c()
+  dists_filtered <- dists %>% filter(!x %in% to_omit, !y %in% to_omit)
+  d <- reshape2::acast(dists_filtered, x~y, value.var="cj")
+  d <- dist(d)
+  pc <- ape::pcoa(d)
+  axes <- data.frame(pc$vectors[, c(1,2)])
+  axes$accnRep <- rownames(axes)
+  axes <- left_join(axes, mdata)
+  ggplot(axes, aes(Axis.1, Axis.2, color=patient)) +
+    geom_point() + 
+    theme_bw() +
+    labs(title="Jaccard PCoA: Outliers are P7/FM and DT001")
+  ggsave(fig.path("_TCR_PCoA_All.pdf"), width=7, height=5)
+  
+}))
+```
+
+```{r fig-tcr-tsne}
+invisible(with(tcr, {
+    # to_omit <- (mdata %>% filter(patient %in% c("P7/FM", "DT001", "P6/BA")))$accnRep
+  browser()
+  to_omit <- c()
+  dists_filtered <- dists %>% filter(!x %in% to_omit, !y %in% to_omit)
+  d <- reshape2::acast(dists_filtered, x~y, value.var="cj")
+  ds <- dist(d)
+  dr <- data.frame(tsne(ds))
+  dr$accnRep <- labels(ds)
+  axes <- left_join(dr, mdata)
+  axes <- axes %>%
+    mutate(patient = ifelse(
+      trial == "Control", 
+      as.character(Group), 
+      as.character(patient)))
+  ggplot(axes, aes(X1, X2, fill=patient)) + 
+    geom_point(color="black", size=3, shape=21) +
+    # scale_shape_manual(values=c(21,22)) +
+    # guides(fill=guide_legend(override.aes = list(shape=23)))+
+    scale_fill_manual(values=createColorPalette(15)) +
+    labs(
+      title="t-SNE of TCR repertoires",
+      x="Axis 1",
+      y="Axis 2"
+    ) +
+    theme(aspect.ratio=1)
+  ggsave(fig.path("_TCR_tSNE_All.pdf"), width=6, height=5)
+  
+  
+}))
+```
+
+
+```{r fig-tcr-pcoa-filtered}
+invisible(with(tcr, {
+  browser()
+  to_omit <- (mdata %>% filter(patient %in% c("P7/FM", "DT001", "P6/BA")))$accnRep
+  # to_omit <- c()
+  dists_filtered <- dists %>% filter(!x %in% to_omit, !y %in% to_omit)
+  d <- reshape2::acast(dists_filtered, x~y, value.var="cj")
+  d <- dist(d)
+  pc <- ape::pcoa(d)
+  axes <- data.frame(pc$vectors[, c(1,2)])
+  axes$accnRep <- rownames(axes)
+  axes <- left_join(axes, mdata)
+  ggplot(axes, aes(Axis.1, Axis.2, color=patient)) +
+    geom_point() + 
+    theme_bw() +
+    labs(title="Jaccard PCoA, no outliers")
+  ggsave(fig.path("_TCR_PCoA_filtered.pdf"), width=7, height=5)
+  ggplot(axes, aes(Axis.1, Axis.2, color=cell.type)) +
+    geom_point() + 
+    theme_bw() +
+    labs(title="Jaccard PCoA, colored by cell type")
+  ggsave(fig.path("_TCR_PCoA_cell.type.pdf"), width=7, height=5)
+}))
+```
+
+```{r fig-tcr-pcoa-filtered-nopbmcs}
+invisible(with(tcr, {
+  browser()
+  to_omit <- (mdata %>% filter(group == "controls" | cell.type == "PBMC" | patient %in% c("P7/FM", "DT001", "P6/BA")))$accnRep
+  # to_omit <- c()
+  dists_filtered <- dists %>% filter(!x %in% to_omit, !y %in% to_omit)
+  d <- reshape2::acast(dists_filtered, x~y, value.var="cj")
+  d <- dist(d)
+  pc <- ape::pcoa(d)
+  axes <- data.frame(pc$vectors[, c(1,2)])
+  axes$accnRep <- rownames(axes)
+  axes <- left_join(axes, mdata)
+  ggplot(axes, aes(Axis.1, Axis.2, color=Group)) +
+    geom_point() + 
+    theme_bw() +
+    labs(title="Jaccard PCoA, T cells only")
+  ggsave(fig.path("_TCR_PCoA_filtered_group.pdf"), width=7, height=5)
+}))
+```
+```{r fig-cell-divisions}
+# is.richness <- intsites$popsize %>% filter(celltype=="Tcells", timepoint_m <= 24) %>% select("nmonths"=timepoint_m, "est.is"=S.chao1) %>%
+#   mutate(est.is = as.integer(est.is))
+# tcr.richness <- ir$alphadiv %>% left_join(distinct(ir$meta, accn, .keep_all=TRUE)) %>% 
+#   filter(Group=="SCIDn2", cell.type=="Tcells") %>% select(nmonths, "est.tcrs"=chao2)
+# combo <- right_join(is.richness, tcr.richness) %>% mutate(cdiv = log(est.tcrs/est.is)/log(2)) %>%
+#   mutate(dist = (est.tcrs) - (est.is)) %>%
+#   mutate(nmonths=as.integer(nmonths))
+# 
+# ggplot(combo, aes(x=nmonths)) +
+#   geom_line(aes(y=est.is)) +
+#   geom_point(aes(y=(est.is), fill="Integration sites"), shape=21, size=3) +
+#   geom_line(aes(y=(est.tcrs))) +
+#   geom_point(aes(y=(est.tcrs), fill="Unique T cells"), shape=21, size=3) +
+#   geom_segment(aes(xend=nmonths, y=(est.is), yend=(est.tcrs)), linetype=3) +
+#   geom_label(aes(y=(dist/2 + (est.is)), label=sprintf("%1.1f", cdiv))) +
+#   scale_fill_discrete("") +
+#   scale_x_continuous("Months since therapy", breaks=c(6,12,18,24)) +
+#   annotation_logticks(sides="l", scaled=TRUE) +
+#   scale_y_log10("Estimated unique t cells or integration sites") +
+#   # ylab("log10") +
+#   ggtitle("Cell divisions") +
+#   theme_classic()
+# ggsave(filename=sprintf("Cell_divisions_%s.pdf", params$subject), height=6, width=8)
+
+invisible(with(tcr, {
+  browser()
+  int.richness <- int %>% filter(nmonths <= 24) %>%
+    select("est.is"=chao1, nmonths, patient)
+  tcr.richness <- alphadiv %>% 
+    left_join(distinct(mdata, accn, .keep_all=TRUE)) %>%
+    filter(Group == "SCIDn2") %>%
+    select(nmonths, "est.tcrs"=chao2, patient)
+  combined <- right_join(int.richness, tcr.richness) %>%
+    mutate(cell.divs = log(est.tcrs/est.is)/log(2)) %>%
+    mutate(dist = est.tcrs - est.is) %>%
+    mutate(patient = as.factor(patient))
+  
+  ggplot(combined, aes(x=nmonths)) +
+    geom_line(aes(y=est.is)) +
+    geom_point(aes(y=(est.is), fill="Integration sites"), shape=21, size=3) +
+    geom_line(aes(y=(est.tcrs))) +
+    geom_point(aes(y=(est.tcrs), fill="Unique T cells"), shape=21, size=3) +
+    geom_segment(aes(xend=nmonths, y=(est.is), yend=(est.tcrs)), linetype=3) +
+    geom_label(aes(y=(dist/10 + (est.is)), label=sprintf("%1.1f", cell.divs))) +
+    scale_fill_discrete("") +
+    scale_x_continuous("Months since therapy", breaks=c(6,12,18,24)) +
+    annotation_logticks(sides="l", scaled=TRUE) +
+    scale_y_log10("Estimated unique t cells or integration sites") +
+    facet_wrap(~patient) +
+    ggtitle("Cell divisions") +
+    theme_bw()
+  # 
+  # divisions <- ggplot(combined, aes(x=nmonths, y=patient, color=patient)) +
+  #   geom_hline(aes(yintercept=as.integer(patient)), color="black", linetype=2) +
+  #   geom_label(aes(label=sprintf("%1.1f", cell.divs))) +
+  #   scale_y_discrete("Min. cell divisions") +
+  #   scale_x_continuous("Months since therapy", breaks=c(4,6,12,18,24)) +
+  #   ggsci::scale_color_aaas(name="Subject", guide="none") +
+  #   theme_minimal() +
+  #   theme(axis.text= element_blank(),
+  #         axis.title.x=element_blank())
+  # 
+  # lines <- ggplot(combined, aes(x=nmonths, color=patient, fill=patient)) +
+  #   geom_line(aes(y=est.is)) +
+  #   geom_point(aes(y=(est.is), shape="Integration sites"), color="black", size=3) +
+  #   geom_line(aes(y=(est.tcrs))) +
+  #   geom_point(aes(y=(est.tcrs), shape="Unique T cells"), color="black", size=3) +
+  #   annotation_logticks(sides="l", scaled=TRUE) +
+  #   scale_y_log10("Est. number") +
+  #   scale_x_continuous("Months since therapy", breaks=c(4,6,12,18,24)) +
+  #   scale_shape_manual("Estimated unique", values=c("Integration sites"=22, "Unique T cells"=24)) +
+  #   ggsci::scale_color_aaas(name="Subject") +
+  #   ggsci::scale_fill_aaas(name="Subject", guide="none")
+  # 
+  # library(gtable)
+  # library(grid) # low-level grid functions are required
+  # g1 <- ggplotGrob(divisions)
+  # g1 <- gtable_add_cols(g1, unit(0,"mm")) # add a column for missing legend
+  # g2 <- ggplotGrob(lines)
+  # 
+  # maxWidths <- unit.pmax(g1$widths, g2$widths)
+  # g1$widths <- maxWidths
+  # g2$widths <- maxWidths
+  # p <- grid.arrange(arrangeGrob(g1,g2,nrow=2,heights=c(0.3,0.7)))
+  # 
+  # 
+  # grid.draw(rbind(ggplotGrob(lines), ggplotGrob(divisions), size="last"))
+  ggsave(fig.path("Fig4-CellDivisions.pdf"), width=10, height=7)
+}))
+```
+
+
+```{r gliph-output}
+invisible(with(tcr, {
+  convert_gene_name <- function(tcrb_name) {
+    str_replace(tcrb_name, "TCRB", "TRB") %>%
+      str_replace_all("0([0-9])", "\\1")
+  }
+  browser()
+  accns <- unique(filter(mdata, patient=="SCID00001", nmonths==6)$accn)
+  test <- seqs %>% filter(sequenceStatus == "In", accn %in% accns) %>%
+    left_join(mdata, by="accn") %>%
+    select("CDR3b"=aminoAcid, "TRBV"=vGeneName, "TRBJ"=jGeneName)
+  test %>%
+    mutate_each(funs(convert_gene_name), TRBV, TRBJ) %>%
+    distinct() %>% 
+    write.table(
+      file="/home/ecl/data/100_SCID/test_gliph.txt", sep="\t", 
+      quote=FALSE, row.names = FALSE)
+}))
+```
+
+## SCIDn1 Diagnostic Figures
+
+```{r pbmc-vs-tcells}
+invisible(with(tcr, {
+  # browser()
+  p <- mdata %>%
+    group_by(patient_at_timept) %>%
+    filter(n_distinct(cell.type)==2) %>%
+  ggplot(aes(patient_at_timept, Unique)) +
+    geom_boxplot(aes(color=cell.type), position=position_dodge(0.4)) +
+    theme_bw() +
+    labs(title="PBMCs show lower unique TCRs than sorted CD3+ cells", x="", y="Unique TCRs")
+  ggsave(fig.path("_PBMC_vs_TCells.pdf"), plot = p, width=7, height=5)
+}))
+```
+
+```{r pbmc-vs-tcells2}
+invisible(with(tcr, {
+  browser()
+  mdat <- mdata %>% filter(group == "patient")
+  model <- lm(Unique ~ cell.type * nmonths, data=mdat)
+  summary(model)
+  p <- ggplot(mdat, aes(x=nmonths, y=Unique, color=cell.type)) +
+    theme_bw() +
+    geom_point(size=2) +
+    # scale_shape_manual(values=c("PBMC"=1, "Tcells"=19)) +
+    labs(title="PBMCs show lower overall TCRs (p < 0.0001)")
+  ggsave(fig.path("_PBMC_vs_TCells_overall.pdf"), plot = p, width=7, height=5)
+}))
+```
+
 
